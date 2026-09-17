@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-38GBMB84Y6"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-38GBMB84Y6');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#071522">
+  <meta name="description" content="DOCK — a silent procedural container-ship docking game for the browser. Beat your best score and challenge your friends.">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:title" content="DOCK — Container Ship Challenge">
+  <meta property="og:description" content="Think parking is easy? Try it with 30,000 tons. Dock precisely, beat your best score and challenge your friends.">
+  <meta property="og:image" content="https://gbyrka.github.io/dock/assets/dock-social.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="DOCK — container ship challenge game cover">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="DOCK — Container Ship Challenge">
+  <meta name="twitter:description" content="Think parking is easy? Try it with 30,000 tons.">
+  <meta name="twitter:image" content="https://gbyrka.github.io/dock/assets/dock-social.png">
+  <link rel="image_src" href="https://gbyrka.github.io/dock/assets/dock-social.png">
+  <title>DOCK — Container Ship Challenge</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div class="brand-block">
+        <p class="eyebrow">HARBOR DOCKING GAME</p>
+        <a class="brand-logo" href="https://www.linkedin.com/in/grzegorz-byrka-81175515/" target="_blank" rel="noopener noreferrer" aria-label="MoD-IT — Grzegorz Byrka on LinkedIn (opens in a new tab)">
+          <img src="assets/mod-it.jpg" alt="MoD-IT" width="600" height="323">
+        </a>
+      </div>
+
+      <div class="title-block" aria-hidden="true">
+        <div class="title">D<span>O</span>CK</div>
+        <div class="subtitle">PRECISION UNDER MOMENTUM</div>
+      </div>
+
+      <div class="scoreboard" aria-live="polite">
+        <div><span>SCORE</span><strong id="score">0</strong></div>
+        <div><span>BEST</span><strong id="best">0</strong></div>
+        <div><span>DOCKS</span><strong id="docks">0</strong></div>
+        <div><span>TIME</span><strong id="time">180</strong></div>
+      </div>
+    </header>
+
+    <section class="game-shell">
+      <canvas id="game" width="1280" height="720" aria-label="Top-down container ship docking game"></canvas>
+      <div class="vignette" aria-hidden="true"></div>
+      <div class="scanlines" aria-hidden="true"></div>
+
+      <div class="mission-pill" id="mission-pill">
+        <span class="pulse-dot"></span>
+        <span id="mission-text">BERTH ASSIGNMENT PENDING</span>
+      </div>
+
+      <div class="challenge-pill" id="challenge-pill" hidden>
+        <span>CHALLENGE</span>
+        <strong id="challenge-score">0</strong>
+        <small id="challenge-gap">TO BEAT</small>
+      </div>
+
+      <div class="tug-status" id="tug-status" role="status" hidden></div>
+
+      <div class="telemetry" aria-live="polite">
+        <div><span>SPEED</span><strong id="speed">0.0</strong><small>kt</small></div>
+        <div><span>HEADING</span><strong id="heading">000</strong><small>°</small></div>
+        <div><span>ALIGN</span><strong id="align">—</strong><small>°</small></div>
+      </div>
+
+      <div class="overlay" id="overlay">
+        <div class="card">
+          <p class="eyebrow">PORT AUTHORITY // NIGHT SHIFT</p>
+          <h1 id="overlay-title">Bring 40,000 tonnes<br><span>gently alongside.</span></h1>
+          <p id="overlay-copy">Every harbor is generated differently, including its moored traffic. Put the entire ship inside the illuminated berth, align with the quay and come almost to a stop.</p>
+
+          <fieldset class="mode-picker">
+            <legend>Choose your watch <span>180 seconds · same docking objective</span></legend>
+            <label><input type="radio" name="mode" value="solo" checked><span><strong>Solo captain</strong><small>One heavy ship. All your skill.</small></span></label>
+            <label><input type="radio" name="mode" value="tug"><span><strong>Tug assist</strong><small>Two vessels. A little extra pull.</small></span></label>
+          </fieldset>
+          <p class="mode-help" id="mode-help">
+            <span data-mode="solo">Use momentum wisely. Line up early and ease into your berth.</span>
+            <span data-mode="tug" hidden>WASD pilots your tug. Q / E slide sideways. Push directly against the hull, or use Space nearby to tow. Push or pull near the bow or stern to turn the ship.</span>
+          </p>
+          <div class="briefing">
+            <div><strong>100</strong><span>base points</span></div>
+            <div><strong>+60</strong><span>centering</span></div>
+            <div><strong>+60</strong><span>alignment</span></div>
+            <div><strong>+60</strong><span>gentle approach</span></div>
+          </div>
+
+          <div class="controls-grid">
+            <div><kbd>↑</kbd><kbd>↓</kbd><span>engine ahead / astern</span></div>
+            <div><kbd>←</kbd><kbd>→</kbd><span>rudder</span></div>
+            <div><kbd>R</kbd><span>restart run</span></div>
+            <div><kbd>Esc</kbd><span>pause / menu</span></div>
+          </div>
+
+          <p class="hint">Quay contact costs 25 points; hitting another vessel costs 35. The timer keeps running as each successful docking sends you to a newly generated harbor.</p>
+          <div class="overlay-actions">
+            <button id="start">Start night shift</button>
+            <button id="share-score" class="share-button" type="button" hidden>Share score on Facebook</button>
+          </div>
+          <p class="share-hint" id="share-hint" hidden></p>
+        </div>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </section>
+
+    <div class="toolbar">
+      <div class="statusline"><span class="status-led"></span><span id="status-text">Harbor systems online</span></div>
+      <button id="menu" type="button">Menu / new game</button>
+    </div>
+
+    <p id="storage-status" role="status"></p>
+    <details class="history">
+      <summary>Score history <span>· last 20 completed runs</span></summary>
+      <ol id="history"></ol>
+    </details>
+
+    <footer>
+      <div class="control-group"><strong>MAIN SHIP</strong><p><kbd>↑</kbd><kbd>↓</kbd> ahead / astern <kbd>←</kbd><kbd>→</kbd> rudder</p></div>
+      <div class="control-group tug-controls" hidden><strong>TUGBOAT</strong><p><kbd>W</kbd><kbd>S</kbd> ahead / astern <kbd>A</kbd><kbd>D</kbd> rudder</p><p><kbd>Q</kbd><kbd>E</kbd> thrust left / right <kbd>Space</kbd> attach / release nearby</p><p>Push against the hull · push near bow / stern to turn</p></div>
+      <div class="control-group"><strong>WATCH CONTROL</strong><p><kbd>R</kbd> restart <kbd>Esc</kbd> menu</p></div>
+    </footer>
+  </main>
+  <script src="game.js"></script>
+</body>
+</html>
