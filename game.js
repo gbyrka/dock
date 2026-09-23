@@ -1,7 +1,8 @@
 'use strict';
 
 const canvas = document.querySelector('#game');
-const ctx = canvas.getContext('2d');
+const scene = new DockScene(canvas);
+const ui = Object.fromEntries(['engine-order','engine-fill','rudder-marker','stopping','assist-text','check-position','check-align','check-speed','check-turn','berth-progress','berth-fill','clock','time-fill','round-summary','resume','announcement'].map(id => [id, document.querySelector('#'+id)]));
 const scoreEl = document.querySelector('#score');
 const bestEl = document.querySelector('#best');
 const docksEl = document.querySelector('#docks');
@@ -43,7 +44,14 @@ const keys = new Set();
 
 let frameId = null;
 let last = performance.now();
-let deadline = 0;
+let remaining = RUN_SECONDS;
+let accumulator = 0;
+let hudElapsed = 0;
+let transition = 0;
+let hitCount = 0;
+let legHits = 0;
+let cleanDockings = 0;
+let bestDock = 0;
 let seconds = RUN_SECONDS;
 let running = false;
 let paused = false;
@@ -265,14 +273,7 @@ function rectPoly(r) {
   ];
 }
 
-function orientedCorners(body = ship) {
-  const ca = Math.cos(body.a), sa = Math.sin(body.a);
-  const hw = body.w / 2, hh = body.h / 2;
-  return [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].map(([x,y]) => ({
-    x: body.x + x * ca - y * sa,
-    y: body.y + x * sa + y * ca
-  }));
-}
+function orientedCorners(body = ship) { return DockPhysics.corners(body); }
 
 function polygonsOverlap(a, b) {
   for (const polygon of [a, b]) {
@@ -402,6 +403,7 @@ function makeHarbor() {
     targetAngle = 0;
   }
   land.push(quay);
+  const protectedBerth = approachProtection(berth);
 
   // Add short peripheral piers, deliberately kept away from the central transit corridor.
   const pierCount = randi(2, 4);
@@ -426,32 +428,32 @@ function makeHarbor() {
     const spawnRect = {x:spawn.x-100,y:spawn.y-100,w:200,h:200};
     const overlapsBerth = polygonsOverlap(rectPoly(expanded), rectPoly(berth));
     const overlapsSpawn = polygonsOverlap(rectPoly(expanded), rectPoly(spawnRect));
-    if (!overlapsBerth && !overlapsSpawn) { land.push(p); piers.push(p); }
+    const blocksApproach = rectsOverlap(p, protectedBerth, 30);
+    const overlapsPier = piers.some(other => rectsOverlap(p, other, 35));
+    if (!overlapsBerth && !overlapsSpawn && !blocksApproach && !overlapsPier && !rectsOverlap(p, quay)) { land.push(p); piers.push(p); }
   }
 
   // Containers and cranes live on solid quay surfaces and are purely decorative.
   const decorRects = [quay, ...piers];
   for (const r of decorRects) {
     const horizontal = r.w > r.h;
-    const count = r.type === 'quay' ? randi(10,18) : randi(2,5);
-    for (let i=0; i<count; i++) {
-      const cw = horizontal ? randi(24,40) : randi(15,22);
-      const ch = horizontal ? randi(14,21) : randi(25,38);
-      containers.push({
-        x: rand(r.x+8, Math.max(r.x+9, r.x+r.w-cw-8)),
-        y: rand(r.y+8, Math.max(r.y+9, r.y+r.h-ch-8)),
-        w:cw,h:ch,
-        c: choice(['#b95945','#c88c3e','#3c7895','#4f8a70','#8b6956','#657381'])
-      });
+    // Ordered stacks leave access lanes instead of intersecting randomly.
+    const span = horizontal ? r.w : r.h;
+    const cross = horizontal ? r.h : r.w;
+    const rows = Math.max(1, Math.floor((cross - 27) / 19));
+    for (let along=14; along<span-40; along+=42) for (let row=0; row<rows; row++) {
+      if (Math.random()<.2) continue;
+      const offset=9+row*19;
+      containers.push({x:r.x+(horizontal?along:offset),y:r.y+(horizontal?offset:along),w:horizontal?34:14,h:horizontal?14:34,c:choice(['#986953','#b09159','#537d8d','#597a70','#856b62','#687d84'])});
     }
   }
 
   const craneCount = randi(3,5);
   for (let i=0;i<craneCount;i++) {
     if (side === 'north' || side === 'south') {
-      cranes.push({x:rand(150,W-150),y: side==='north' ? quay.y+quay.h-13 : quay.y+13,a: side==='north'?0:Math.PI});
+      cranes.push({x:150+(W-300)*(i+.5)/craneCount+rand(-24,24),y: side==='north' ? quay.y+quay.h-13 : quay.y+13,a: side==='north'?0:Math.PI});
     } else {
-      cranes.push({x: side==='west' ? quay.x+quay.w-13 : quay.x+13,y:rand(130,H-130),a: side==='west'?-Math.PI/2:Math.PI/2});
+      cranes.push({x: side==='west' ? quay.x+quay.w-13 : quay.x+13,y:100+(H-200)*(i+.5)/craneCount+rand(-15,15),a: side==='west'?-Math.PI/2:Math.PI/2});
     }
   }
 
@@ -467,7 +469,6 @@ function makeHarbor() {
 
   // Populate the harbor with moored traffic. Ships stay clear of the player's berth,
   // straight-in approach corridor, spawn area, land, and each other.
-  const protectedBerth = approachProtection(berth);
   const spawnSafe = {x:spawn.x-115,y:spawn.y-115,w:230,h:230};
   const mooringOptions = [];
   const waterFace = side === 'north' ? 'bottom' : side === 'south' ? 'top' : side === 'west' ? 'right' : 'left';
@@ -512,18 +513,20 @@ function makeHarbor() {
 
 function resetShipForHarbor() {
   const s = harbor.spawn;
-  Object.assign(ship, {x:s.x,y:s.y,a:s.a,vx:0,vy:0,omega:0,throttle:0,rudder:0});
+  Object.assign(ship, {x:s.x,y:s.y,a:s.a,vx:0,vy:0,omega:0,throttle:0,rudder:0,contactGrace:0});
   resetTug();
-  berthHold = 0;
+  berthHold = 0; legHits = 0;
   collisionCooldown = .4;
   wake = [];
   missionText.textContent = `BERTH ${harbor.berthName} · ${harbor.side.toUpperCase()} QUAY`;
+  document.querySelector('#chart-number').textContent = String(harborIndex).padStart(2, '0');
   statusText.textContent = `Harbor ${harborIndex.toString().padStart(2,'0')} · proceed to highlighted berth`;
 }
 
 function newHarbor() {
   harbor = makeHarbor();
   resetShipForHarbor();
+  particles=[];scene.configure(harbor);
 }
 
 function showToast(html, ms=1600) {
@@ -534,52 +537,52 @@ function showToast(html, ms=1600) {
 }
 
 function start() {
-  cancelAnimationFrame(frameId);
-  keys.clear();
+  cancelAnimationFrame(frameId); frameId = null; keys.clear();
   mode = document.querySelector('input[name="mode"]:checked').value;
-  score = 0;
-  dockings = 0;
-  challengeBeatenAnnounced = false;
-  harborIndex = 0;
-  seconds = RUN_SECONDS;
-  deadline = performance.now() + RUN_SECONDS * 1000;
-  particles = [];
-  scoreEl.textContent = score;
-  docksEl.textContent = dockings;
-  timeEl.textContent = seconds;
-  titleEl.innerHTML = 'Bring 40,000 tonnes<br><span>gently alongside.</span>';
-  copyEl.textContent = 'Every harbor is generated differently, including its moored traffic. Put the entire ship inside the illuminated berth, align with the quay and come almost to a stop.';
-  startBtn.textContent = 'Start night shift';
-  shareBtn.hidden = true;
-  shareHintEl.hidden = true;
-  updateChallengeHud(false);
-  newHarbor();
-  running = true;
-  paused = false;
-  overlay.classList.add('hidden');
-  startBtn.blur();
-  last = performance.now();
-  frameId = requestAnimationFrame(loop);
+  score = 0; dockings = 0; hitCount = 0; cleanDockings = 0; bestDock = 0;
+  completedMode = null; challengeBeatenAnnounced = false; harborIndex = 0;
+  remaining = RUN_SECONDS; seconds = RUN_SECONDS; accumulator = 0; transition = 0; hudElapsed = 0;
+  particles = []; running = true; paused = false;
+  shareBtn.hidden = true; shareHintEl.hidden = true; ui.resume.hidden = true; ui['round-summary'].hidden = true;
+  startBtn.classList.remove('secondary');
+  document.querySelectorAll('.tug-controls').forEach(el => el.hidden = mode !== 'tug');
+  updateChallengeHud(false); newHarbor(); setOverlay(false); updateHUD();
+  last = performance.now(); frameId = requestAnimationFrame(loop);
+  ui.announcement.textContent = `Watch started. Proceed to berth ${harbor.berthName}.`;
 }
 
-function openMenu() {
-  if (!running) { overlay.classList.remove('hidden'); return; }
-  paused = true;
-  running = false;
-  cancelAnimationFrame(frameId);
-  titleEl.innerHTML = 'Harbor control<br><span>on standby.</span>';
-  copyEl.textContent = 'This run is paused. Starting again creates a fresh procedural harbor and resets the score.';
-  startBtn.textContent = 'Start new run';
-  shareBtn.hidden = true;
-  shareHintEl.hidden = true;
-  overlay.classList.remove('hidden');
+function openMenu(reason = 'manual') {
+  if (!running) { setOverlay(true); return; }
+  paused = true; running = false; keys.clear(); accumulator = 0;
+  cancelAnimationFrame(frameId); frameId = null;
+  titleEl.innerHTML = 'The harbor can wait.<br><span>Your watch is paused.</span>';
+  copyEl.textContent = reason === 'focus' ? 'Your watch was paused while you were away. Resume with the same vessels, towline, score and remaining time.' : 'Take a breather. Resume exactly where you left off, or start a fresh watch below.';
+  document.querySelector('#overlay-eyebrow').textContent = 'HARBOR CONTROL / STANDBY';
+  startBtn.textContent = 'Start a new watch ↗'; startBtn.classList.add('secondary');
+  ui.resume.hidden = false; ui['round-summary'].hidden = true;
+  shareBtn.hidden = true; shareHintEl.hidden = true;
+  toastEl.classList.remove('show'); updateHUD(); draw(performance.now()); setOverlay(true);
+}
+
+function setOverlay(visible) {
+  overlay.classList.toggle('hidden', !visible); canvas.inert = visible;
+  if (visible) { overlay.scrollTop = 0; (paused ? ui.resume : startBtn).focus({preventScroll:true}); }
+  else canvas.focus({preventScroll:true});
+}
+
+function resume() {
+  if (!paused) return;
+  document.querySelector(`input[value="${mode}"]`).checked = true;
+  keys.clear(); paused = false; running = true; accumulator = 0;
+  last = performance.now(); selectMode(); setOverlay(false); frameId = requestAnimationFrame(loop);
 }
 
 function finish() {
   if (!running) return;
-  running = false;
-  seconds = 0;
-  timeEl.textContent = '0';
+  running = false; paused = false; keys.clear();
+  seconds = 0; remaining = 0;
+  ui.resume.hidden = true; startBtn.classList.remove('secondary');
+  document.querySelector('#overlay-eyebrow').textContent = 'WATCH COMPLETE / CAPTAIN’S LOG';
   completedMode = mode;
   saveResult();
   updateChallengeHud(false);
@@ -603,7 +606,13 @@ function finish() {
   shareBtn.hidden = false;
   shareHintEl.hidden = false;
   shareHintEl.textContent = 'Sharing creates a challenge link with an encoded score and opens Facebook.';
-  overlay.classList.remove('hidden');
+  const summary = ui['round-summary']; summary.replaceChildren();
+  for (const [value,label] of [[cleanDockings,'without contact'],[hitCount,'contacts'],[bestDock,'best docking']]) {
+    const item=document.createElement('div'), strong=document.createElement('strong');
+    strong.textContent=value;item.append(strong,document.createTextNode(label));summary.append(item);
+  }
+  summary.hidden=false;ui.announcement.textContent=`Watch complete. ${score} points and ${dockings} dockings.`;
+  updateHUD();setOverlay(true);
 }
 
 function worldSpeed() { return Math.hypot(ship.vx, ship.vy); }
@@ -620,17 +629,13 @@ function emitWake(dt) {
   wake.push({
     x: backX + Math.cos(ship.a)*side*ship.w*.28,
     y: backY + Math.sin(ship.a)*side*ship.w*.28,
-    r:rand(2,5), life:1, max:rand(.8,1.4)
+    r:rand(2,5), life:1, max:rand(1.4,2.2), a:ship.a
   });
-  if (wake.length > 180) wake.shift();
+  if (wake.length > 240) wake.shift();
 }
 
-function emitCollision() {
-  for (let i=0;i<26;i++) particles.push({
-    x:ship.x+rand(-20,20), y:ship.y+rand(-45,45),
-    vx:rand(-95,95), vy:rand(-95,95), life:rand(.35,.85), max:1,
-    type: Math.random() < .55 ? 'spark' : 'foam'
-  });
+function emitCollision(body = ship, point = body) {
+  for(let i=0;i<15;i++)particles.push({x:point.x+rand(-5,5),y:point.y+rand(-5,5),vx:rand(-35,35),vy:rand(-35,35),life:rand(.3,.7),max:.7,type:Math.random()<.25?'spark':'foam'});
 }
 
 function updateParticles(dt) {
@@ -643,471 +648,184 @@ function updateParticles(dt) {
 }
 
 function collisionInfo(body = ship) {
-  const poly = orientedCorners(body);
-  if (harbor.land.some(r => polygonsOverlap(poly, rectPoly(r)))) return {type:'structure'};
-  const other = harbor.otherShips?.find(o => polygonsOverlap(poly, orientedCorners(o)));
-  if (other) return {type:'vessel', ship:other};
+  const poly = orientedCorners(body), bounds = bodyBounds(body);
+  for (const r of harbor.land) {
+    if (!rectsOverlap(bounds, r)) continue;
+    const contact = DockPhysics.manifold(poly, rectPoly(r));
+    if (contact) return {type:'structure', object:r, ...contact};
+  }
+  for (const other of harbor.otherShips || []) {
+    if (!rectsOverlap(bounds, bodyBounds(other))) continue;
+    const contact = DockPhysics.manifold(poly, orientedCorners(other));
+    if (contact) return {type:'vessel', object:other, ...contact};
+  }
   return null;
+}
+
+function handleContact(body, old, hit, isTug) {
+  const impact = DockPhysics.resolveContact(body, old, hit, isTug);
+  if ((body.contactGrace || 0) <= 0 && collisionCooldown <= 0 && impact > 2) {
+    const penalty = hit.type === 'vessel' ? 35 : 25;
+    score = Math.max(0, score - penalty); hitCount++; legHits++;
+    collisionCooldown = .65;
+    updateChallengeHud(false);
+    emitCollision(body, hit.point);
+    showToast(`<strong>−${penalty}</strong> · ${isTug ? 'tug ' : ''}${hit.type === 'vessel' ? 'vessel contact' : 'quay contact'}`, 1500);
+    statusText.textContent = 'Contact reported · ease off and move clear';
+  }
+  // One continuous scrape is one contact, not a fresh penalty on every frame.
+  body.contactGrace = .5;
 }
 
 function moveShip(dt) {
   const old = {...ship};
-  const throttleInput = (keys.has('ArrowUp') ? 1 : 0) + (keys.has('ArrowDown') ? -1 : 0);
-  const rudderInput = (keys.has('ArrowLeft') ? -1 : 0) + (keys.has('ArrowRight') ? 1 : 0);
-  ship.throttle = lerp(ship.throttle, throttleInput, 1 - Math.pow(.12, dt));
-  ship.rudder = lerp(ship.rudder, rudderInput, 1 - Math.pow(.04, dt));
-
-  const f = forwardVector();
-  const side = {x:Math.cos(ship.a), y:Math.sin(ship.a)};
-  const fs = ship.vx*f.x + ship.vy*f.y;
-  const ls = ship.vx*side.x + ship.vy*side.y;
-
-  // Heavy, damped ship dynamics. Reverse thrust is intentionally weaker.
-  const thrust = ship.throttle >= 0 ? 31 : 20;
-  ship.vx += f.x * ship.throttle * thrust * dt;
-  ship.vy += f.y * ship.throttle * thrust * dt;
-  // Stronger lateral drag than longitudinal drag creates a believable hull feel.
-  ship.vx -= f.x * fs * .075 * dt + side.x * ls * .62 * dt;
-  ship.vy -= f.y * fs * .075 * dt + side.y * ls * .62 * dt;
-  const speedCap = 72;
-  const sp = worldSpeed();
-  if (sp > speedCap) { ship.vx *= speedCap/sp; ship.vy *= speedCap/sp; }
-
-  const steerAuthority = clamp(Math.abs(fs)/22, .08, 1.25);
-  const reverseSign = fs < -1 ? -1 : 1;
-  ship.omega += ship.rudder * reverseSign * steerAuthority * 0.43 * dt;
-  ship.omega *= Math.pow(.72,dt);
-  ship.omega = clamp(ship.omega,-.42,.42);
-  ship.a = normAngle(ship.a + ship.omega*dt);
-  ship.x += ship.vx*dt;
-  ship.y += ship.vy*dt;
-
+  ship.contactGrace = Math.max(0, (ship.contactGrace || 0) - dt);
+  DockPhysics.advance(ship, {ahead:keys.has('ArrowUp'), astern:keys.has('ArrowDown'), left:keys.has('ArrowLeft'), right:keys.has('ArrowRight')}, dt);
   const hit = collisionInfo();
-  if (hit) {
-    Object.assign(ship, old);
-    ship.vx = -old.vx * .18;
-    ship.vy = -old.vy * .18;
-    ship.omega = -old.omega * .25;
-    if (collisionCooldown <= 0) {
-      const penalty = hit.type === 'vessel' ? 35 : 25;
-      score = Math.max(0, score - penalty);
-      scoreEl.textContent = score;
-      updateChallengeHud(false);
-      collisionCooldown = 1.1;
-      emitCollision();
-      showToast(`<strong>−${penalty}</strong> · ${hit.type === 'vessel' ? 'vessel contact' : 'hull contact'}`, 1050);
-      statusText.textContent = hit.type === 'vessel'
-        ? 'Collision with moored vessel · keep a wider berth'
-        : 'Contact reported · reduce speed near structures';
-    }
-  }
+  if (hit) handleContact(ship, old, hit, false);
   if (mode === 'tug' && polygonsOverlap(orientedCorners(ship), orientedCorners(tug))) {
     const oldTug = {...tug};
     separateTug();
     if (collisionInfo(tug)) {
-      Object.assign(tug, oldTug);
-      Object.assign(ship, old);
+      Object.assign(tug, oldTug); Object.assign(ship, old);
       ship.vx *= .95; ship.vy *= .95; ship.omega *= .9;
     }
   }
   emitWake(dt);
 }
 
-function dockingMetrics() {
-  const b = harbor.berth;
-  const corners = orientedCorners();
-  const inside = corners.every(p => p.x > b.x+4 && p.x < b.x+b.w-4 && p.y > b.y+4 && p.y < b.y+b.h-4);
-  const targetA = harbor.targetAngle;
-  // Ship can point either direction along a berth.
-  const align = Math.min(angleDiff(ship.a,targetA), angleDiff(ship.a,targetA+Math.PI));
-  const speed = worldSpeed();
-  const cx = b.x+b.w/2, cy = b.y+b.h/2;
-  const longHalf = (b.w > b.h ? b.w : b.h) / 2;
-  const centerDistance = Math.hypot(ship.x-cx,ship.y-cy);
-  return {inside, align, speed, centerDistance, longHalf};
-}
+function dockingMetrics() { return DockPhysics.docking(ship, harbor.berth, harbor.targetAngle); }
 
 function completeDock(metrics) {
   const centerBonus = Math.round(60 * clamp(1 - metrics.centerDistance / 65, 0, 1));
   const alignBonus = Math.round(60 * clamp(1 - metrics.align / (14*Math.PI/180), 0, 1));
   const gentleBonus = Math.round(60 * clamp(1 - metrics.speed / 9, 0, 1));
   const earned = 100 + centerBonus + alignBonus + gentleBonus;
-  score += earned;
-  dockings++;
-  scoreEl.textContent = score;
-  docksEl.textContent = dockings;
-  showToast(`<strong>+${earned}</strong> · clean docking`, 1450);
-  statusText.textContent = `Berth ${harbor.berthName} secured · new assignment received`;
-  for (let i=0;i<46;i++) particles.push({x:ship.x+rand(-70,70),y:ship.y+rand(-80,80),vx:rand(-45,45),vy:rand(-45,45),life:rand(.5,1.25),max:1,type:'success'});
-  newHarbor();
+  score += earned; dockings++; bestDock = Math.max(bestDock, earned);
+  if (legHits === 0) cleanDockings++;
+  showToast(`<strong>BERTH SECURED  +${earned}</strong><br>Centering +${centerBonus} · Alignment +${alignBonus} · Approach +${gentleBonus}`, 3100);
+  statusText.textContent = `Berth ${harbor.berthName} secured · receiving the next assignment`;
+  for (let i=0;i<32;i++) particles.push({x:ship.x+rand(-45,45),y:ship.y+rand(-55,55),vx:rand(-25,25),vy:rand(-25,25),life:rand(.6,1.3),max:1.3,type:'success'});
+  transition = 1.05; berthHold = 1.35; keys.clear();
   updateChallengeHud(true);
+  ui.announcement.textContent = `Berth secured. ${earned} points. Total ${score}.`;
 }
 
 function update(dt) {
-  if (performance.now() >= deadline) { finish(); return; }
-  collisionCooldown -= dt;
-  const steps = Math.max(1, Math.ceil(dt * 120));
-  for (let i=0;i<steps;i++) {
-    const step=dt/steps;
-    if (mode==='tug') applyTow(step);
-    moveShip(step);
-    if (mode==='tug') moveTug(step);
+  remaining = Math.max(0, remaining - dt);
+  if (remaining <= 0) { finish(); return; }
+  collisionCooldown = Math.max(0, collisionCooldown - dt);
+  updateParticles(dt);
+  if (transition > 0) {
+    transition = Math.max(0, transition - dt);
+    if (transition === 0) { newHarbor(); keys.clear(); }
+    return;
+  }
+  if (mode === 'tug') applyTow(dt);
+  moveShip(dt);
+  if (mode === 'tug') moveTug(dt);
+  const metrics = dockingMetrics();
+  berthHold = metrics.ready ? berthHold + dt : 0;
+  if (berthHold >= 1.35) completeDock(metrics);
+}
+
+function setText(element, text) { if(element.textContent!==String(text))element.textContent=text; }
+
+function updateHUD() {
+  const metrics=dockingMetrics(), motion=DockPhysics.components(ship);
+  seconds=Math.ceil(remaining);
+  setText(timeEl, `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`);
+  setText(scoreEl,score);setText(docksEl,dockings);
+  ui.clock.classList.toggle('urgent',seconds<=20);
+  ui['time-fill'].style.transform=`scaleX(${remaining/RUN_SECONDS})`;
+  setText(speedEl,(metrics.speed*.19).toFixed(1));
+  setText(headingEl,String(Math.round((ship.a*180/Math.PI+360)%360)%360).padStart(3,'0'));
+  setText(alignEl,Math.round(metrics.align*180/Math.PI));
+  alignEl.parentElement.style.color=metrics.aligned?'var(--green)':'var(--amber)';
+  setText(ui.stopping,`≈ ${(DockPhysics.stoppingDistance(ship)/ship.h).toFixed(1)} hulls`);
+  const order=Math.abs(ship.throttle)<.05?'NEUTRAL':ship.throttle<0?'ASTERN':ship.throttle<.5?'SLOW AHEAD':'AHEAD';
+  setText(ui['engine-order'],order);
+  ui['engine-order'].style.color=ship.throttle<-.05?'var(--amber)':'var(--cyan)';
+  ui['engine-fill'].style.left=`${ship.throttle<0?50+ship.throttle*50:50}%`;
+  ui['engine-fill'].style.width=`${Math.abs(ship.throttle)*50}%`;
+  ui['engine-fill'].style.background=ship.throttle<0?'var(--amber)':'var(--cyan)';
+  ui['rudder-marker'].style.left=`${50+ship.rudder*48}%`;
+  for(const [id,ok] of [['position',metrics.inside],['align',metrics.aligned],['speed',metrics.slow],['turn',metrics.settled]])ui['check-'+id].classList.toggle('met',ok);
+  const progress=clamp(berthHold/1.35,0,1);
+  ui['berth-fill'].style.transform=`scaleX(${progress})`;
+  ui['berth-progress'].setAttribute('aria-valuenow',String(Math.round(progress*100)));
+  const near=metrics.centerDistance<250;
+  let help='PROCEED TO ASSIGNED BERTH';
+  if(paused)help='WATCH PAUSED';
+  else if(!running)help=completedMode?'WATCH COMPLETE':'AWAITING DEPARTURE';
+  else if(transition>0)help='BERTH SECURED';
+  else if(metrics.ready)help='HOLD STEADY · SECURING LINES';
+  else if(metrics.inside&&!metrics.aligned)help='ALIGN WITH THE QUAY';
+  else if(metrics.inside&&!metrics.slow)help='OPPOSITE ENGINE TO SLOW';
+  else if(metrics.inside&&!metrics.settled)help='LET THE TURN SETTLE';
+  else if(near&&!metrics.slow)help='SLOW YOUR APPROACH';
+  else if(near&&!metrics.aligned)help='LINE UP WITH THE BERTH';
+  else if(near)help='BRING THE WHOLE HULL INSIDE';
+  setText(ui['assist-text'],help);
+  if(running&&transition===0&&collisionCooldown<=0) {
+    const drift=Math.abs(motion.lateral)*.19;
+    statusText.textContent=metrics.ready?`Berth ${harbor.berthName} · securing ${Math.round(progress*100)}%`:`${mode==='tug'?'TUG ASSIST':'SOLO CAPTAIN'} / Harbor ${String(harborIndex).padStart(2,'0')} · ${drift>.3?`sideways drift ${drift.toFixed(1)} kt`:'clear water, steady hands'}`;
   }
   updateTugHud();
-  updateParticles(dt);
-
-  const m = dockingMetrics();
-  const angleDeg = m.align*180/Math.PI;
-  alignEl.textContent = Math.round(angleDeg).toString();
-  if (m.inside && m.speed < 10 && m.align < 14*Math.PI/180) {
-    berthHold += dt;
-    statusText.textContent = `Berth ${harbor.berthName} · hold position ${Math.round(clamp(berthHold/1.35,0,1)*100)}%`;
-    if (berthHold >= 1.35) completeDock(m);
-  } else {
-    berthHold = 0;
-  }
-
-  const speedKnots = worldSpeed() * .19;
-  speedEl.textContent = speedKnots.toFixed(1);
-  let deg = ((ship.a * 180/Math.PI) % 360 + 360) % 360;
-  headingEl.textContent = Math.round(deg).toString().padStart(3,'0');
-  seconds = Math.max(0, Math.ceil((deadline-performance.now())/1000));
-  timeEl.textContent = seconds;
-  if (seconds <= 0) finish();
-}
-
-function rr(x,y,w,h,r=8) { ctx.beginPath(); ctx.roundRect(x,y,w,h,r); }
-
-function drawWater(now) {
-  const g = ctx.createLinearGradient(0,0,W,H);
-  g.addColorStop(0,'#0a3444');
-  g.addColorStop(.48,'#082b3b');
-  g.addColorStop(1,'#061e2c');
-  ctx.fillStyle = g;
-  ctx.fillRect(0,0,W,H);
-
-  ctx.save();
-  ctx.globalAlpha = .22;
-  ctx.lineWidth = 1;
-  for (let y=26;y<H;y+=26) {
-    const offset = ((now*.012 + y*.41) % 56) - 28;
-    ctx.strokeStyle = y%52===0 ? '#66c4d5' : '#3c879b';
-    ctx.beginPath();
-    for (let x=-40;x<W+40;x+=28) {
-      const yy = y + Math.sin((x+y)*.018 + now*.00055)*3;
-      if (x===-40) ctx.moveTo(x+offset,yy); else ctx.lineTo(x+offset,yy);
-    }
-    ctx.stroke();
-  }
-  ctx.restore();
-
-  // Soft port-light reflections.
-  ctx.save();
-  ctx.globalCompositeOperation = 'screen';
-  for (const l of harbor.lights) {
-    const a = .035 + .025*Math.sin(now*.002+l.phase);
-    const grad = ctx.createLinearGradient(l.x,l.y,l.x,l.y+80);
-    grad.addColorStop(0,`rgba(126,225,218,${a})`);
-    grad.addColorStop(1,'rgba(126,225,218,0)');
-    ctx.fillStyle=grad;
-    ctx.fillRect(l.x-2,l.y,4,80);
-  }
-  ctx.restore();
-}
-
-function drawLand() {
-  for (const r of harbor.land) {
-    ctx.save();
-    ctx.shadowColor = '#001019b8';
-    ctx.shadowBlur = r.type==='wall' ? 0 : 18;
-    ctx.shadowOffsetY = 7;
-    const g = ctx.createLinearGradient(r.x,r.y,r.x+r.w,r.y+r.h);
-    g.addColorStop(0, r.type==='wall' ? '#1b2830' : '#253139');
-    g.addColorStop(1, r.type==='wall' ? '#111c23' : '#18242b');
-    ctx.fillStyle=g;
-    rr(r.x,r.y,r.w,r.h,r.type==='wall'?0:4);ctx.fill();
-    ctx.shadowColor='transparent';
-    ctx.strokeStyle='#60717a55';ctx.lineWidth=1;ctx.stroke();
-    // Quay edge hazard markers.
-    if (r.type!=='wall') {
-      ctx.save();ctx.beginPath();ctx.rect(r.x,r.y,r.w,r.h);ctx.clip();
-      ctx.strokeStyle='#e1b75055';ctx.lineWidth=5;ctx.setLineDash([16,12]);
-      ctx.strokeRect(r.x+2,r.y+2,r.w-4,r.h-4);ctx.setLineDash([]);ctx.restore();
-    }
-    ctx.restore();
-  }
-}
-
-function drawContainers() {
-  for (const c of harbor.containers) {
-    ctx.save();
-    ctx.fillStyle='#0007';ctx.fillRect(c.x+3,c.y+4,c.w,c.h);
-    ctx.fillStyle=c.c;rr(c.x,c.y,c.w,c.h,2);ctx.fill();
-    ctx.strokeStyle='#ffffff16';ctx.lineWidth=1;ctx.stroke();
-    ctx.strokeStyle='#00000028';
-    for(let x=c.x+6;x<c.x+c.w;x+=7){ctx.beginPath();ctx.moveTo(x,c.y+2);ctx.lineTo(x,c.y+c.h-2);ctx.stroke();}
-    ctx.restore();
-  }
-}
-
-function drawCranes() {
-  for (const c of harbor.cranes) {
-    ctx.save();ctx.translate(c.x,c.y);ctx.rotate(c.a);
-    ctx.strokeStyle='#0b1116aa';ctx.lineWidth=7;ctx.beginPath();ctx.moveTo(4,4);ctx.lineTo(4,55);ctx.lineTo(38,86);ctx.stroke();
-    ctx.strokeStyle='#d19b46';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(0,52);ctx.lineTo(34,82);ctx.stroke();
-    ctx.strokeStyle='#7b5a2d';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,19);ctx.lineTo(18,65);ctx.moveTo(0,36);ctx.lineTo(30,76);ctx.stroke();
-    ctx.fillStyle='#f6d579';ctx.shadowColor='#f2be59';ctx.shadowBlur=12;ctx.beginPath();ctx.arc(34,82,2.7,0,Math.PI*2);ctx.fill();ctx.restore();
-  }
-}
-
-function drawBerth(now) {
-  const b = harbor.berth;
-  const pulse = .55 + .25*Math.sin(now*.004);
-  ctx.save();
-  ctx.fillStyle=`rgba(67,224,177,${.08+pulse*.03})`;
-  ctx.strokeStyle=`rgba(104,244,205,${.6+pulse*.25})`;
-  ctx.lineWidth=3;
-  ctx.setLineDash([12,9]);
-  rr(b.x,b.y,b.w,b.h,8);ctx.fill();ctx.stroke();ctx.setLineDash([]);
-
-  // Berth centerline and mooring marks.
-  ctx.strokeStyle='#8bffe45d';ctx.lineWidth=1.5;ctx.setLineDash([8,12]);ctx.beginPath();
-  if (b.w>b.h) { ctx.moveTo(b.x+14,b.y+b.h/2);ctx.lineTo(b.x+b.w-14,b.y+b.h/2); }
-  else { ctx.moveTo(b.x+b.w/2,b.y+14);ctx.lineTo(b.x+b.w/2,b.y+b.h-14); }
-  ctx.stroke();ctx.setLineDash([]);
-
-  ctx.fillStyle='#bfffee';ctx.font='900 12px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.shadowColor='#65f3cd';ctx.shadowBlur=12;
-  ctx.fillText(harbor.berthName,b.x+b.w/2,b.y+b.h/2);
-  ctx.restore();
-}
-
-function drawBuoys(now) {
-  for (const b of harbor.buoys) {
-    ctx.save();ctx.translate(b.x,b.y);
-    ctx.fillStyle='#020a0e88';ctx.beginPath();ctx.ellipse(4,6,8,4,0,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle=b.c;ctx.shadowColor=b.c;ctx.shadowBlur=10+5*Math.sin(now*.004);ctx.beginPath();ctx.arc(0,0,5,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle='#d5f4f1';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,-3);ctx.lineTo(0,-10);ctx.stroke();ctx.restore();
-  }
-}
-
-function drawWake() {
-  ctx.save();
-  for (const p of wake) {
-    ctx.globalAlpha = p.life*.22;
-    ctx.strokeStyle='#d7fcff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function drawShip() {
-  const m = dockingMetrics();
-  const f = clamp(berthHold/1.35,0,1);
-  ctx.save();ctx.translate(ship.x,ship.y);ctx.rotate(ship.a);
-
-  // Shadow + wake slit.
-  ctx.save();ctx.translate(6,8);ctx.fillStyle='#00101875';ctx.shadowColor='#000';ctx.shadowBlur=16;rr(-ship.w/2,-ship.h/2,ship.w,ship.h,13);ctx.fill();ctx.restore();
-
-  // Hull.
-  const hg=ctx.createLinearGradient(-ship.w/2,0,ship.w/2,0);hg.addColorStop(0,'#aebbc1');hg.addColorStop(.45,'#eef4f4');hg.addColorStop(1,'#87999f');
-  ctx.fillStyle=hg;ctx.beginPath();
-  ctx.moveTo(0,-ship.h/2-7);ctx.lineTo(ship.w/2-2,-ship.h/2+20);ctx.lineTo(ship.w/2,ship.h/2-9);ctx.quadraticCurveTo(0,ship.h/2+8,-ship.w/2,ship.h/2-9);ctx.lineTo(-ship.w/2+2,-ship.h/2+20);ctx.closePath();ctx.fill();
-  ctx.strokeStyle='#dbe5e6aa';ctx.lineWidth=1;ctx.stroke();
-
-  // Deck.
-  ctx.fillStyle='#1f5665';rr(-ship.w/2+4,-ship.h/2+24,ship.w-8,ship.h-40,5);ctx.fill();
-  ctx.fillStyle='#123d4c';rr(-ship.w/2+7,ship.h/2-31,ship.w-14,21,4);ctx.fill();
-
-  // Container stacks.
-  const cols=['#c76249','#d08c3e','#4d86a4','#4d8c70','#8e7164'];
-  let n=0;
-  for (let yy=-ship.h/2+34; yy<ship.h/2-39; yy+=16) {
-    for (let xx=-ship.w/2+7; xx<ship.w/2-8; xx+=13) {
-      ctx.fillStyle=cols[(n++ + harborIndex)%cols.length];rr(xx,yy,11,13,1.5);ctx.fill();ctx.strokeStyle='#ffffff18';ctx.stroke();
-    }
-  }
-
-  // Bridge.
-  ctx.fillStyle='#e8f0ed';rr(-ship.w/2+4,ship.h/2-38,ship.w-8,13,3);ctx.fill();
-  ctx.fillStyle='#88c6d2';ctx.fillRect(-ship.w/2+8,ship.h/2-34,ship.w-16,4);
-  // Navigation lights.
-  ctx.fillStyle='#68f2b3';ctx.shadowColor='#68f2b3';ctx.shadowBlur=11;ctx.beginPath();ctx.arc(-ship.w/2+2,-13,2.3,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#ff645f';ctx.shadowColor='#ff645f';ctx.beginPath();ctx.arc(ship.w/2-2,-13,2.3,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#fff3ba';ctx.shadowColor='#fff0a0';ctx.beginPath();ctx.arc(0,-ship.h/2-3,2.3,0,Math.PI*2);ctx.fill();
-  ctx.restore();
-
-  if (f>0) {
-    ctx.save();ctx.strokeStyle='#76f2ca';ctx.lineWidth=5;ctx.shadowColor='#76f2ca';ctx.shadowBlur=14;ctx.beginPath();ctx.arc(ship.x,ship.y,96,-Math.PI/2,-Math.PI/2+Math.PI*2*f);ctx.stroke();ctx.restore();
-  }
-
-  if (m.inside && m.align < 14*Math.PI/180 && m.speed < 10) {
-    ctx.save();ctx.fillStyle='#baffec';ctx.font='900 10px system-ui';ctx.textAlign='center';ctx.fillText('HOLD POSITION',ship.x,ship.y-102);ctx.restore();
-  }
-}
-
-
-function drawMooredShip(v, now) {
-  const bob = Math.sin(now*.0016 + v.phase) * .7;
-  const beam = v.w, len = v.h;
-  ctx.save();
-  ctx.translate(v.x, v.y + bob);
-  ctx.rotate(v.a);
-
-  ctx.save();
-  ctx.translate(4,6);
-  ctx.fillStyle='#00101870';
-  ctx.shadowColor='#000';
-  ctx.shadowBlur=11;
-  rr(-beam/2,-len/2,beam,len,Math.max(4,beam*.28));
-  ctx.fill();
-  ctx.restore();
-
-  const hull = ctx.createLinearGradient(-beam/2,0,beam/2,0);
-  hull.addColorStop(0,'#84959a');
-  hull.addColorStop(.48,'#d6dfde');
-  hull.addColorStop(1,'#60737a');
-  ctx.fillStyle=hull;
-  ctx.beginPath();
-  ctx.moveTo(0,-len/2-4);
-  ctx.lineTo(beam/2-1,-len/2+Math.min(15,len*.15));
-  ctx.lineTo(beam/2,len/2-6);
-  ctx.quadraticCurveTo(0,len/2+4,-beam/2,len/2-6);
-  ctx.lineTo(-beam/2+1,-len/2+Math.min(15,len*.15));
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle=v.tone;
-  rr(-beam/2+3,-len/2+18,beam-6,len-30,Math.max(2,beam*.12));
-  ctx.fill();
-
-  if (v.kind === 'cargo') {
-    const cols=['#9d5f4d','#8d784d','#4e7383','#61796e'];
-    let i=0;
-    for(let yy=-len/2+27; yy<len/2-34; yy+=14) {
-      for(let xx=-beam/2+5; xx<beam/2-6; xx+=11) {
-        ctx.fillStyle=cols[(i++ + harborIndex)%cols.length];
-        rr(xx,yy,9,11,1);ctx.fill();
-      }
-    }
-  } else if (v.kind === 'ferry') {
-    ctx.fillStyle='#dce5e2';
-    rr(-beam/2+4,-len/2+25,beam-8,Math.max(24,len*.48),3);ctx.fill();
-    ctx.fillStyle='#79aab5';
-    for (let yy=-len/2+31; yy<-len/2+25+Math.max(24,len*.48)-6; yy+=10) {
-      ctx.fillRect(-beam/2+7,yy,beam-14,2);
-    }
-  } else if (v.kind === 'coaster') {
-    ctx.fillStyle='#b7c7c7';
-    rr(-beam/2+4,len/2-30,beam-8,18,3);ctx.fill();
-    ctx.fillStyle='#263e48';
-    rr(-beam/2+5,-len/2+28,beam-10,Math.max(22,len*.42),2);ctx.fill();
-  } else {
-    ctx.fillStyle=v.kind === 'pilot' ? '#d6a84b' : '#b24f45';
-    rr(-beam/2+3,-len/2+18,beam-6,len*.42,3);ctx.fill();
-    ctx.fillStyle='#e7eeee';
-    rr(-beam/2+4,len*.02,beam-8,len*.27,3);ctx.fill();
-    ctx.fillStyle='#4a7781';
-    ctx.fillRect(-beam/2+6,len*.08,beam-12,3);
-  }
-
-  ctx.fillStyle='#f1f5ec';
-  rr(-beam/2+4,len/2-27,beam-8,10,2);ctx.fill();
-  ctx.fillStyle='#78a9b5';
-  ctx.fillRect(-beam/2+6,len/2-24,beam-12,3);
-
-  ctx.fillStyle='#65efb5';ctx.shadowColor='#65efb5';ctx.shadowBlur=7;ctx.beginPath();ctx.arc(-beam/2+1,-len*.08,1.6,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#ff6a64';ctx.shadowColor='#ff6a64';ctx.beginPath();ctx.arc(beam/2-1,-len*.08,1.6,0,Math.PI*2);ctx.fill();
-  ctx.restore();
-
-  const sideVec = {x:Math.cos(v.a), y:Math.sin(v.a)};
-  const sideSign = v.dockSide === 'left' || v.dockSide === 'top' ? -1 : 1;
-  const lineStart1 = {x:v.x + sideVec.x*sideSign*v.w*.46, y:v.y+bob + sideVec.y*sideSign*v.w*.46};
-  const forward = {x:Math.sin(v.a), y:-Math.cos(v.a)};
-  const lineStart2 = {x:lineStart1.x + forward.x*v.h*.28, y:lineStart1.y + forward.y*v.h*.28};
-  const lineStart3 = {x:lineStart1.x - forward.x*v.h*.28, y:lineStart1.y - forward.y*v.h*.28};
-  ctx.save();
-  ctx.strokeStyle='#c8b99255';ctx.lineWidth=1;
-  ctx.beginPath();ctx.moveTo(lineStart2.x,lineStart2.y);ctx.lineTo(v.moor.x,v.moor.y);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(lineStart3.x,lineStart3.y);ctx.lineTo(v.moor.x,v.moor.y);ctx.stroke();
-  ctx.restore();
-}
-
-function drawOtherShips(now) {
-  for (const v of harbor.otherShips || []) drawMooredShip(v, now);
-}
-
-function drawParticles() {
-  ctx.save();ctx.globalCompositeOperation='screen';
-  for (const p of particles) {
-    const a=clamp(p.life/p.max,0,1);
-    ctx.globalAlpha=a;
-    if (p.type==='spark') { ctx.fillStyle='#ffcb6d';ctx.shadowColor='#ff9c42';ctx.shadowBlur=8;ctx.fillRect(p.x,p.y,2,2); }
-    else if (p.type==='success') { ctx.fillStyle='#65efd1';ctx.shadowColor='#65efd1';ctx.shadowBlur=7;ctx.beginPath();ctx.arc(p.x,p.y,2.2,0,Math.PI*2);ctx.fill(); }
-    else { ctx.strokeStyle='#dffbff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(p.x,p.y,4+(1-a)*9,0,Math.PI*2);ctx.stroke(); }
-  }
-  ctx.restore();
 }
 
 function draw(now) {
-  if (!harbor) return;
-  drawWater(now);
-  drawWake();
-  drawBerth(now);
-  drawLand();
-  drawContainers();
-  drawOtherShips(now);
-  drawBuoys(now);
-  drawShip();
-  drawTug();
-  // Gantry arms extend over the water, so cranes must render above vessels.
-  drawCranes();
-  drawParticles();
-
-  // Harbor grid labels for a subtle chart-like feel.
-  ctx.save();ctx.fillStyle='#7bb6c723';ctx.font='800 9px ui-monospace, monospace';ctx.textAlign='left';
-  for(let x=90;x<W;x+=180) ctx.fillText(`E ${String(x*7).padStart(4,'0')}`,x,31);
-  for(let y=110;y<H;y+=140) ctx.fillText(`N ${String((H-y)*9).padStart(4,'0')}`,25,y);
-  ctx.restore();
+  if(!harbor)return;
+  const towAnchor=mode==='tug'?(tow?hullPoint(tow.local):canAttach()?nearestTowPoint().point:null):null;
+  scene.draw({ship,tug,tow,mode,berthHold,particles,wake,running,towAnchor,metrics:dockingMetrics()},now);
 }
 
 function loop(now) {
-  if (!running) return;
-  const dt = Math.min(.033, Math.max(.001,(now-last)/1000));
-  last = now;
-  update(dt);
+  frameId=null;
+  if(!running)return;
+  const dt=Math.max(0,(now-last)/1000);last=now;
+  if(dt>.5){openMenu('focus');return;}
+  accumulator+=dt;hudElapsed+=dt;
+  while(accumulator>=DockPhysics.STEP&&running){update(DockPhysics.STEP);accumulator-=DockPhysics.STEP;}
+  if(hudElapsed>=.08||!running){updateHUD();hudElapsed=0;}
   draw(now);
-  if (running) frameId = requestAnimationFrame(loop);
+  if(running)frameId=requestAnimationFrame(loop);
 }
 
-addEventListener('keydown', e => {
-  if (['INPUT','SELECT','BUTTON'].includes(e.target?.tagName)) return;
-  const key=e.key.length===1?e.key.toLowerCase():e.key;
-  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(key)) e.preventDefault();
-  if (running) keys.add(key);
-  if (key===' ' && !e.repeat) toggleTow();
-  if (key==='Escape' && !e.repeat) { keys.clear(); openMenu(); }
-  if (key==='r' && !e.repeat) start();
+function eventKey(event) { return event.code==='Space'?' ':event.key.length===1?event.key.toLowerCase():event.key; }
+addEventListener('keydown',event=>{
+  const key=eventKey(event);
+  if(!overlay.classList.contains('hidden')&&key==='Tab') {
+    const controls=[...overlay.querySelectorAll('button, input')].filter(el=>!el.hidden&&!el.disabled&&(el.type!=='radio'||el.checked));
+    const first=controls[0],end=controls[controls.length-1];
+    if(event.shiftKey&&(document.activeElement===first||!controls.includes(document.activeElement))){event.preventDefault();end.focus();}
+    else if(!event.shiftKey&&(document.activeElement===end||!controls.includes(document.activeElement))){event.preventDefault();first.focus();}
+    return;
+  }
+  if(key==='Escape'&&!event.repeat){event.preventDefault();if(paused)resume();else openMenu();return;}
+  if(event.ctrlKey||event.metaKey||event.altKey||event.target?.closest('input, select, textarea, button, a, summary, [contenteditable="true"]'))return;
+  if(key==='r'&&!event.repeat){event.preventDefault();start();return;}
+  if(!running)return;
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','w','s','a','d','q','e',' '].includes(key)) {
+    event.preventDefault();if(!event.repeat)keys.add(key);
+    if(key===' '&&!event.repeat)toggleTow();
+  }
 });
-addEventListener('keyup', e => keys.delete(e.key.length===1?e.key.toLowerCase():e.key));
-addEventListener('blur', () => keys.clear());
-document.querySelectorAll('input[name="mode"]').forEach(el => el.addEventListener('change', selectMode));
-startBtn.addEventListener('click', start);
-menuBtn.addEventListener('click', openMenu);
-shareBtn.addEventListener('click', shareScoreOnFacebook);
-
+addEventListener('keyup',event=>keys.delete(eventKey(event)));
+addEventListener('blur',()=>{keys.clear();if(running)openMenu('focus');});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)openMenu('focus');});
+document.querySelectorAll('input[name="mode"]').forEach(el=>el.addEventListener('change',selectMode));
+startBtn.addEventListener('click',start);ui.resume.addEventListener('click',resume);
+menuBtn.addEventListener('click',()=>openMenu());shareBtn.addEventListener('click',shareScoreOnFacebook);
 document.querySelector(`input[value="${mode}"]`).checked=true;
-renderRecords();
-harbor = makeHarbor();
-resetShipForHarbor();
-selectMode();
-updateChallengeHud(false);
-if (challengeScore !== null) {
-  titleEl.innerHTML = `Beat ${challengeScore} points.<br><span>Challenge accepted?</span>`;
-  copyEl.textContent = 'A friend sent you this score to beat. You still get a fresh procedural harbor every time — only the target travels with the link.';
-  startBtn.textContent = 'Accept challenge';
-  statusText.textContent = `Challenge received · beat ${challengeScore} points`;
+renderRecords();newHarbor();selectMode();updateChallengeHud(false);
+if(challengeScore!==null) {
+  titleEl.innerHTML=`Beat ${challengeScore} points.<br><span>Challenge accepted?</span>`;
+  copyEl.textContent='A friend sent you this score to beat. A fresh procedural harbor awaits — only the target travels with the link.';
+  startBtn.textContent='Accept challenge ↗';statusText.textContent=`Challenge received · beat ${challengeScore} points`;
 }
-draw(performance.now());
+canvas.inert=true;draw(performance.now());
+new ResizeObserver(()=>{scene.resize();draw(performance.now());}).observe(document.querySelector('#board-wrap'));
 
 // The towline pulls at a fixed point on the main hull, transferring both force
 // and torque. It goes slack when the tug moves closer; it never pushes.
@@ -1164,7 +882,7 @@ function toggleTow() {
 
 function resetTug() {
   tow=null;
-  Object.assign(tug,{a:ship.a,vx:0,vy:0,omega:0,throttle:0,rudder:0,jet:0});
+  Object.assign(tug,{a:ship.a,vx:0,vy:0,omega:0,throttle:0,rudder:0,jet:0,contactGrace:0});
   // Search nearby open water before falling back to the rest of the basin.
   const candidates=[];
   for (const radius of [72,96,130,175,230,320,450,600,800]) {
@@ -1205,90 +923,35 @@ function applyTow(dt) {
   tow.tension=force;
   // Main ship mass 5, tug mass 1; hull inertia keeps the rotation gradual.
   ship.vx+=nx*force/5*dt; ship.vy+=ny*force/5*dt;
-  ship.omega=clamp(ship.omega+(rx*ny-ry*nx)*force/11000*dt,-.42,.42);
+  ship.omega=clamp(ship.omega+(rx*ny-ry*nx)*force/DockPhysics.MAIN.inertia*dt,-DockPhysics.MAIN.maxYaw,DockPhysics.MAIN.maxYaw);
   tug.vx-=nx*force*dt; tug.vy-=ny*force*dt;
 }
 
 function moveTug(dt) {
-  const old={...tug};
-  const throttle=(keys.has('w')?1:0)-(keys.has('s')?1:0);
-  const rudder=(keys.has('d')?1:0)-(keys.has('a')?1:0);
-  tug.jet=(keys.has('e')?1:0)-(keys.has('q')?1:0);
-  tug.throttle=lerp(tug.throttle,throttle,1-Math.exp(-5*dt));
-  tug.rudder=lerp(tug.rudder,rudder,1-Math.exp(-7*dt));
-  const fx=Math.sin(tug.a), fy=-Math.cos(tug.a), sx=Math.cos(tug.a), sy=Math.sin(tug.a);
-  const fs=tug.vx*fx+tug.vy*fy, ls=tug.vx*sx+tug.vy*sy;
-  tug.vx+=(fx*(tug.throttle*95-fs*.85)+sx*(tug.jet*85-ls*1.8))*dt;
-  tug.vy+=(fy*(tug.throttle*95-fs*.85)+sy*(tug.jet*85-ls*1.8))*dt;
-  tug.omega+=tug.rudder*(fs < -3 ? -1 : 1)*clamp(Math.abs(fs)/22,.35,1)*2.6*dt;
-  tug.omega*=Math.exp(-2.5*dt);
-  tug.a=normAngle(tug.a+tug.omega*dt);
-  const speed=Math.hypot(tug.vx,tug.vy);
-  if (speed>110) { tug.vx*=110/speed; tug.vy*=110/speed; }
-  tug.x+=tug.vx*dt; tug.y+=tug.vy*dt;
-  const hit=collisionInfo(tug);
-  if (hit) {
-    Object.assign(tug,old);
-    tug.vx=ship.vx*.3-old.vx*.15; tug.vy=ship.vy*.3-old.vy*.15; tug.omega=-old.omega*.2;
-    if (hit && collisionCooldown<=0) {
-      const penalty=hit.type==='vessel'?35:25;
-      score=Math.max(0,score-penalty); scoreEl.textContent=score;
-      collisionCooldown=1.1; updateChallengeHud(false);
-      showToast(`<strong>−${penalty}</strong> · tug ${hit.type==='vessel'?'vessel':'quay'} contact`);
-    }
-  }
+  const old = {...tug};
+  tug.contactGrace = Math.max(0, (tug.contactGrace || 0) - dt);
+  DockPhysics.advance(tug, {ahead:keys.has('w'), astern:keys.has('s'), left:keys.has('a'), right:keys.has('d'), port:keys.has('q'), starboard:keys.has('e')}, dt, true);
+  const hit = collisionInfo(tug);
+  if (hit) handleContact(tug, old, hit, true);
   if (polygonsOverlap(orientedCorners(tug),orientedCorners(ship))) {
     separateTug();
     if (collisionInfo(tug)) {
       tug.x=old.x; tug.y=old.y; tug.a=old.a;
     }
   }
-  if ((speed>8 || tug.jet) && Math.random()<dt*24) {
-    wake.push({x:tug.x-fx*25-sx*tug.jet*12,y:tug.y-fy*25-sy*tug.jet*12,r:2,life:.8,max:.7});
-    if (wake.length>180) wake.shift();
+  const speed=Math.hypot(tug.vx,tug.vy), fx=Math.sin(tug.a), fy=-Math.cos(tug.a);
+  if ((speed>8 || Math.abs(tug.jet)>.1) && Math.random()<dt*24) {
+    wake.push({x:tug.x-fx*25,y:tug.y-fy*25,r:2,life:.8,max:.7,a:tug.a});
+    if(wake.length>240)wake.shift();
   }
-}
-
-function drawTug() {
-  if (mode!=='tug') return;
-  const anchor=tow ? hullPoint(tow.local) : nearestTowPoint().point;
-  const ready=!tow && canAttach();
-  ctx.save();
-  if (tow || ready) {
-    ctx.strokeStyle=tow ? (tow.tension>3?'#ffe4a0':'#baa774') : '#85efc680';
-    ctx.lineWidth=tow?2.5:1; if (!tow) ctx.setLineDash([4,5]);
-    ctx.beginPath();ctx.moveTo(anchor.x,anchor.y);
-    const slack=tow ? clamp(tow.length-dist(tug,anchor),0,25) : 0;
-    ctx.quadraticCurveTo((anchor.x+tug.x)/2,(anchor.y+tug.y)/2+slack,tug.x,tug.y);ctx.stroke();ctx.setLineDash([]);
-    ctx.fillStyle='#ffe4a0';ctx.beginPath();ctx.arc(anchor.x,anchor.y,3,0,Math.PI*2);ctx.fill();
-  }
-  ctx.translate(tug.x,tug.y);ctx.rotate(tug.a);
-  ctx.shadowColor='#0008';ctx.shadowBlur=10;ctx.shadowOffsetY=4;
-  ctx.fillStyle='#101f28';rr(-15,-27,30,56,12);ctx.fill();
-  ctx.shadowBlur=0;ctx.shadowOffsetY=0;
-  ctx.fillStyle='#efb956';rr(-11,-25,22,51,10);ctx.fill();
-  ctx.strokeStyle='#ffe4a4';ctx.lineWidth=1;ctx.stroke();
-  ctx.fillStyle='#87572e';rr(-8,6,16,15,3);ctx.fill();
-  ctx.fillStyle='#f1f3df';rr(-9,-15,18,23,4);ctx.fill();
-  ctx.fillStyle='#254f62';rr(-7,-12,14,7,2);ctx.fill();
-  ctx.fillStyle='#637981';ctx.fillRect(-1,-4,2,9);
-  for (const side of [-1,1]) {
-    ctx.fillStyle='#14212a';for(const y of [-13,4,17]) {ctx.beginPath();ctx.ellipse(side*12,y,3,5,0,0,Math.PI*2);ctx.fill();}
-    ctx.fillStyle=side<0?'#63efad':'#ff7474';ctx.beginPath();ctx.arc(side*10,-17,1.8,0,Math.PI*2);ctx.fill();
-  }
-  if (tug.jet && running) {
-    ctx.strokeStyle='#c1f7fa99';ctx.lineWidth=2;
-    for(const y of [-16,15]) {ctx.beginPath();ctx.moveTo(-tug.jet*14,y);ctx.lineTo(-tug.jet*25,y+3);ctx.stroke();}
-  }
-  ctx.restore();ctx.save();ctx.textAlign='center';ctx.font='800 9px system-ui';ctx.fillStyle='#ffe4a4';
-  ctx.fillText('TUG 01',tug.x,tug.y+43);ctx.restore();
 }
 
 function selectMode() {
   const selected=document.querySelector('input[name="mode"]:checked').value;
-  document.querySelectorAll('#mode-help [data-mode]').forEach(el => el.hidden=el.dataset.mode!==selected);
-  document.querySelectorAll('.tug-controls').forEach(el => el.hidden=selected!=='tug');
-  if (!running) { mode=selected; resetTug(); draw(performance.now()); }
+  document.querySelectorAll('#mode-help [data-mode]').forEach(el=>el.hidden=el.dataset.mode!==selected);
+  if(!running&&!paused){mode=selected;resetTug();}
+  document.querySelectorAll('.tug-controls').forEach(el=>el.hidden=mode!=='tug');
+  updateHUD();draw(performance.now());
 }
 
 // Rubber fenders transfer a non-bouncing contact impulse in both directions.
@@ -1317,7 +980,7 @@ function separateTug() {
     // thruster input becomes a steady push; separating hulls receive no force.
     const impulse=closing/(1+1/5+arm*arm/11000);
     ship.vx-=normal.x*impulse/5; ship.vy-=normal.y*impulse/5;
-    ship.omega=clamp(ship.omega-arm*impulse/11000,-.42,.42);
+    ship.omega=clamp(ship.omega-arm*impulse/DockPhysics.MAIN.inertia,-DockPhysics.MAIN.maxYaw,DockPhysics.MAIN.maxYaw);
     tug.vx+=normal.x*impulse; tug.vy+=normal.y*impulse;
   }
   tug.x+=normal.x*(depth+.01); tug.y+=normal.y*(depth+.01);

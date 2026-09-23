@@ -1,10 +1,5 @@
-const vm=require('node:vm'),fs=require('node:fs'),assert=require('node:assert/strict');
-const elements=new Map();
-const context2d=new Proxy({}, {get:(_,key)=>key.startsWith('create')?()=>({addColorStop(){}}):()=>{},set:()=>true});
-const el=()=>({textContent:'',value:'solo',hidden:false,classList:{add(){},remove(){},toggle(){}},getContext:()=>context2d,width:1280,height:720,addEventListener(){},replaceChildren(){},append(){},blur(){}});
-const document={cookie:'',querySelector(s){if(s.includes(':checked'))s='selected';if(!elements.has(s))elements.set(s,el());return elements.get(s)},querySelectorAll(){return []},createElement:el};
-const sandbox={document,location:{search:'',protocol:'http:',href:'http://localhost/'},performance:{now:()=>0},URL,URLSearchParams,Math,Date,console,Uint16Array,Uint8Array,DataView,btoa,atob,setTimeout:()=>1,clearTimeout(){},requestAnimationFrame:()=>1,cancelAnimationFrame(){},addEventListener(){},assert};
-vm.createContext(sandbox);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname, '../game.js'),'utf8'),sandbox);
+const vm = require('node:vm');
+const sandbox = require('./harness.cjs')();
 vm.runInContext(`
 function setupPush(offset=0, heading=-Math.PI/2, gap=0) {
   mode='tug'; tow=null; keys.clear(); score=100; collisionCooldown=0;
