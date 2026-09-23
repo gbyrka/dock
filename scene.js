@@ -248,7 +248,7 @@ window.DockScene = class DockScene {
     ctx.shadowColor='#a4e9bb';this.circle(ctx,beam/2-1,bridgeY+1,main?1.8:1.3,'#98e8b1');
     ctx.shadowColor='#fff2cb';this.circle(ctx,0,-len/2+8,1.3,'#fff0c4');ctx.restore();
     if(main) {
-      ctx.save();ctx.translate(0,len/2+1);ctx.rotate(vessel.rudder*.5);this.line(ctx,0,-3,0,7,'#b8d7d5',2);ctx.restore();
+      ctx.save();ctx.translate(0,len/2+1);ctx.rotate(-vessel.rudder*.5);this.line(ctx,0,-3,0,7,'#b8d7d5',2);ctx.restore();
     }
     ctx.restore();
   }
