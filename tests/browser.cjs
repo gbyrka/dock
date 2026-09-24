@@ -91,7 +91,7 @@ const url=process.env.DOCK_URL||'http://127.0.0.1:8766';
   console.log('PASS: tug WASD, Q/E, Space attach/release, clear spawn, and pause with a towline');
 
   await page.keyboard.press('Escape');
-  await page.locator('#start').focus();await page.keyboard.press('Tab');
+  await page.locator('.menu-credit a').focus();await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(()=>document.activeElement.value),'tug','Tab wraps into selected mode');
   for(const [width,height] of [[1280,720],[1024,768],[800,600],[390,844],[360,640]]){
    await page.setViewportSize({width,height});await page.waitForTimeout(90);

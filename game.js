@@ -796,7 +796,7 @@ function eventKey(event) { return event.code==='Space'?' ':event.key.length===1?
 addEventListener('keydown',event=>{
   const key=eventKey(event);
   if(!overlay.classList.contains('hidden')&&key==='Tab') {
-    const controls=[...overlay.querySelectorAll('button, input')].filter(el=>!el.hidden&&!el.disabled&&(el.type!=='radio'||el.checked));
+    const controls=[...overlay.querySelectorAll('button, input, a[href]')].filter(el=>!el.hidden&&!el.disabled&&(el.type!=='radio'||el.checked));
     const first=controls[0],end=controls[controls.length-1];
     if(event.shiftKey&&(document.activeElement===first||!controls.includes(document.activeElement))){event.preventDefault();end.focus();}
     else if(!event.shiftKey&&(document.activeElement===end||!controls.includes(document.activeElement))){event.preventDefault();first.focus();}

@@ -164,3 +164,10 @@ kbd { display: inline-grid; place-items: center; min-width: 21px; height: 21px; 
   .quick-controls { gap: 10px; } .statusline { font-size: 8px; } footer { justify-content: flex-start; font-size: 8px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* Shared collection navigation inside the game menu. */
+.card .games-navigation { margin-top: 18px; border-top: 1px solid #ffffff20; padding-top: 15px; }
+.card .games-navigation a { display: flex; align-items: center; justify-content: center; min-height: 44px; border: 1px solid #ffffff30; border-radius: 8px; color: #eef5ed; background: #ffffff08; text-decoration: none; font-size: 13px; font-weight: 600; }
+.card .games-navigation a:hover { background: #ffffff16; border-color: #ffffff60; }
+.card .menu-credit { margin-top: 14px; color: #aab9bc; text-align: center; font-size: 10px; line-height: 1.6; }
+.card .menu-credit a { color: #d6e1df; text-underline-offset: 3px; }

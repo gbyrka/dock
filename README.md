@@ -1,6 +1,6 @@
 # DOCK
 
-A silent, top-down procedural container-ship docking game for the browser. No dependencies, no build step and no audio. The only external navigation is the LinkedIn logo link and the optional Facebook share action.
+A silent, top-down procedural container-ship docking game for the browser. No dependencies, no build step and no audio. The logo and menu link to the games collection; the menu credit links to the author on LinkedIn. An optional Facebook share action is also available.
 
 ## Objective
 
@@ -107,7 +107,7 @@ The folder can be deployed directly to GitHub Pages. Publish the new `marine-phy
 
 ## Branding
 
-The MoD-IT logo in the upper-left corner links to Grzegorz Byrka's LinkedIn profile. The original logo artwork is in `assets/mod-it.jpg` and is visually adapted to the dark interface with CSS.
+The MoD-IT logo and the menu's Browse all games link open the games collection at `../games/`. The menu footer credits Grzegorz Byrka and links to his LinkedIn profile. The original logo artwork is in `assets/mod-it.jpg` and is visually adapted to the dark interface with CSS.
 
 ## Files
 
