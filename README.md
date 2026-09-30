@@ -103,7 +103,7 @@ python3 -m http.server 8000
 
 Then open `http://localhost:8000`.
 
-The folder can be deployed directly to GitHub Pages. Publish the new `marine-physics.js` and `scene.js` files together with `game.js`, `index.html`, `style.css` and `assets`; no build is needed. Google Analytics retains the shared `G-WTPHWDLQ7K` stream.
+The folder can be deployed directly to GitHub Pages. Publish `marine-physics.js` and `scene.js` together with `game.js`, `index.html`, `style.css`, `ads.css`, `monetization.js` and `assets`; no build is needed. Google Analytics retains the shared `G-WTPHWDLQ7K` stream and waits for Google CMP permission. The responsive footer ad is outside the viewport-sized app, separated by 150px. See the sibling games README for the required AdSense Consent Mode settings.
 
 ## Branding
 
