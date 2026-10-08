@@ -138,9 +138,9 @@ The score in the URL is not stored as a plain number. It is packed with a random
 
 `index.html` contains Open Graph and Twitter card metadata pointing at:
 
-`https://gbyrka.github.io/dock/assets/dock-social.png`
+`https://gbyrka.games/dock/assets/dock-social.png`
 
-The included image is exactly **1200 × 630 px**, suitable for a large social preview. The fallback public URL used when testing from `file://` is `https://gbyrka.github.io/dock/`. There is intentionally no fixed `og:url`: this lets Facebook keep the `?c=...` challenge token in the shared address. If the game is published under another repository/path/domain, update `og:image`, `twitter:image`, `image_src`, and `PUBLIC_URL` in `game.js`.
+The included image is exactly **1200 × 630 px**, suitable for a large social preview. The fallback public URL used when testing from `file://` is `https://gbyrka.games/dock/`. There is intentionally no fixed `og:url`: this lets Facebook keep the `?c=...` challenge token in the shared address. If the game is published under another repository/path/domain, update `og:image`, `twitter:image`, `image_src`, and `PUBLIC_URL` in `game.js`.
 
 Facebook may cache a preview after the URL is shared for the first time. If you replace `dock-social.png` later, Facebook's Sharing Debugger can be used to request a fresh scrape.
 

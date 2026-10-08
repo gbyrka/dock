@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <script data-site-https>
+    (() => {
+      const { hostname, protocol, pathname, search, hash } = location;
+      const publicHosts = ['gbyrka.games', 'www.gbyrka.games', 'gbyrka.github.io'];
+      if (publicHosts.includes(hostname) && (protocol !== 'https:' || hostname !== 'gbyrka.games')) {
+        location.replace(`https://gbyrka.games${pathname}${search}${hash}`);
+      }
+    })();
+  </script>
   <meta name="google-adsense-account" content="ca-pub-3806610967714181">
   <link rel="stylesheet" href="./ads.css?v=adlaunch1">
   <script src="./monetization.js?v=adlaunch1"></script>
@@ -14,21 +23,21 @@
   <meta property="og:locale" content="en_US">
   <meta property="og:title" content="DOCK — Container Ship Challenge">
   <meta property="og:description" content="Think parking is easy? Try it with 30,000 tons. Dock precisely, beat your best score and challenge your friends.">
-  <meta property="og:image" content="https://gbyrka.github.io/dock/assets/dock-social.png">
+  <meta property="og:image" content="https://gbyrka.games/dock/assets/dock-social.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="DOCK — container ship challenge game cover">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="DOCK — Container Ship Challenge">
   <meta name="twitter:description" content="Think parking is easy? Try it with 30,000 tons.">
-  <meta name="twitter:image" content="https://gbyrka.github.io/dock/assets/dock-social.png">
-  <link rel="image_src" href="https://gbyrka.github.io/dock/assets/dock-social.png">
+  <meta name="twitter:image" content="https://gbyrka.games/dock/assets/dock-social.png">
+  <link rel="image_src" href="https://gbyrka.games/dock/assets/dock-social.png">
   <title>DOCK — Container Ship Challenge</title>
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
   <link rel="stylesheet" href="style.css">
   <script src="marine-physics.js" defer></script>
   <script src="scene.js" defer></script>
-  <script src="game.js" defer></script>
+  <script src="game.js?v=domain1" defer></script>
 </head>
 <body>
   <main class="app">

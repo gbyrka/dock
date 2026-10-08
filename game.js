@@ -36,7 +36,7 @@ const W = canvas.width;
 const H = canvas.height;
 const RUN_SECONDS = 180;
 const COOKIE = 'dock_scores_v1';
-const PUBLIC_URL = 'https://gbyrka.github.io/dock/';
+const PUBLIC_URL = 'https://gbyrka.games/dock/';
 // Reversible client-side obfuscation. The key is intentionally local to the game:
 // this hides casual score-reading in shared URLs, but is not an anti-cheat boundary.
 const SHARE_KEY = [0x6d2b79f5, 0xa53c91e7, 0x1f4d3b27, 0xc8e6a149];
