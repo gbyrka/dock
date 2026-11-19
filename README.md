@@ -107,7 +107,7 @@ The folder can be deployed directly to GitHub Pages. Publish `marine-physics.js`
 
 ## Branding
 
-The MoD-IT logo and the menu's Browse all games link open the games collection at `../games/`. The menu footer credits Grzegorz Byrka and links to his LinkedIn profile. The original logo artwork is in `assets/mod-it.jpg` and is visually adapted to the dark interface with CSS.
+The MoD-IT logo and the menu's Browse all games link open the games collection at `/`. The menu footer credits Grzegorz Byrka and links to his LinkedIn profile. The original logo artwork is in `assets/mod-it.jpg` and is visually adapted to the dark interface with CSS.
 
 ## Files
 
